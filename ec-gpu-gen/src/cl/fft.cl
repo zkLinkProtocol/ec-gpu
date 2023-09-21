@@ -9,7 +9,9 @@ KERNEL void FIELD_radix_fft(GLOBAL FIELD* x, // Source buffer
                       uint n, // Number of elements
                       uint lgp, // Log2 of `p` (Read more in the link above)
                       uint deg, // 1=>radix2, 2=>radix4, 3=>radix8, ...
-                      uint max_deg) // Maximum degree supported, according to `pq` and `omegas`
+                      uint max_deg, // Maximum degree supported, according to `pq` and `omegas`
+                      uint lgn, // log2 of `n`
+                      uint keep_reverse)
 {
 // CUDA doesn't support local buffers ("shared memory" in CUDA lingo) as function arguments,
 // ignore that argument and use the globally defined extern memory instead.
@@ -28,7 +30,7 @@ KERNEL void FIELD_radix_fft(GLOBAL FIELD* x, // Source buffer
   uint k = index & (p - 1);
 
   x += index;
-  y += ((index - k) << deg) + k;
+  uint yindex = ((index - k) << deg) + k;
 
   uint count = 1 << deg; // 2^deg
   uint counth = count >> 1; // Half of count
@@ -50,7 +52,7 @@ KERNEL void FIELD_radix_fft(GLOBAL FIELD* x, // Source buffer
     const uint bit = counth >> rnd;
     for(uint i = counts >> 1; i < counte >> 1; i++) {
       const uint di = i & (bit - 1);
-      const uint i0 = (i << 1) - di;
+      const uint i0 = (i << 1) - di;   
       const uint i1 = i0 + bit;
       tmp = u[i0];
       u[i0] = FIELD_add(u[i0], u[i1]);
@@ -61,9 +63,16 @@ KERNEL void FIELD_radix_fft(GLOBAL FIELD* x, // Source buffer
     BARRIER_LOCAL();
   }
 
-  for(uint i = counts >> 1; i < counte >> 1; i++) {
-    y[i*p] = u[bitreverse(i, deg)];
-    y[(i+counth)*p] = u[bitreverse(i + counth, deg)];
+  if (keep_reverse) {
+    for(uint i = counts >> 1; i < counte >> 1; i++) {
+      y[bitreverse(yindex+i*p, lgn)] = u[bitreverse(i, deg)];
+      y[bitreverse(yindex+(i+counth)*p, lgn)] = u[bitreverse(i + counth, deg)];
+    }
+  } else {
+    for(uint i = counts >> 1; i < counte >> 1; i++) {
+      y[yindex+i*p] = u[bitreverse(i, deg)];
+      y[yindex+(i+counth)*p] = u[bitreverse(i + counth, deg)];
+    }
   }
 }
 

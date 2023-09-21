@@ -52,15 +52,15 @@ mod program;
 mod source;
 
 /// Fast Fourier Transform on the GPU.
-#[cfg(any(feature = "cuda", feature = "opencl"))]
+//#[cfg(any(feature = "cuda", feature = "opencl"))]
 pub mod fft;
 /// Fast Fourier Transform on the CPU.
-pub mod fft_cpu;
+//pub mod fft_cpu;
 /// Multiexponentiation on the GPU.
 #[cfg(any(feature = "cuda", feature = "opencl"))]
 pub mod multiexp;
 /// Multiexponentiation on the CPU.
-pub mod multiexp_cpu;
+//pub mod multiexp_cpu;
 /// Helpers for multithreaded code.
 pub mod threadpool;
 

@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::{env, fs};
 
 use ec_gpu::{GpuField, GpuName};
-use group::prime::PrimeCurveAffine;
+use pairing::CurveAffine;
 
 static COMMON_SRC: &str = include_str!("cl/common.cl");
 static FIELD_SRC: &str = include_str!("cl/field.cl");
@@ -180,12 +180,19 @@ impl<P: GpuName, F: GpuName, Exp: GpuName> NameAndSource for Multiexp<P, F, Exp>
     }
 
     fn source(&self, _limb: Limb32Or64) -> String {
+        let verbose;
+        if (&P::name()).to_string().contains("G2") {
+            verbose = ".c0";
+        } else {
+            verbose = "";
+        }
         let ec = String::from(EC_SRC)
             .replace("FIELD", &F::name())
             .replace("POINT", &P::name());
         let multiexp = String::from(MULTIEXP_SRC)
             .replace("POINT", &P::name())
-            .replace("EXPONENT", &Exp::name());
+            .replace("EXPONENT", &Exp::name())
+            .replace("VERBOSE", verbose);
         [ec, multiexp].concat()
     }
 }
@@ -270,7 +277,7 @@ impl SourceBuilder {
     /// directly.
     pub fn add_multiexp<C, F>(self) -> Self
     where
-        C: PrimeCurveAffine + GpuName,
+        C: CurveAffine + GpuName,
         C::Scalar: GpuField,
         F: GpuField + 'static,
     {

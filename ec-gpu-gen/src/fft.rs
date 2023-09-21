@@ -1,8 +1,7 @@
 use std::cmp;
 use std::sync::{Arc, RwLock};
 
-use ec_gpu::GpuName;
-use ff::Field;
+use pairing::ff::Field;
 use log::{error, info};
 use rust_gpu_tools::{program_closures, LocalBuffer, Program};
 
@@ -16,7 +15,7 @@ const MAX_LOG2_LOCAL_WORK_SIZE: u32 = 7; // 128
 /// FFT kernel for a single GPU.
 pub struct SingleFftKernel<'a, F>
 where
-    F: Field + GpuName,
+    F: Field,
 {
     program: Program,
     /// An optional function which will be called at places where it is possible to abort the FFT
@@ -26,7 +25,7 @@ where
     _phantom: std::marker::PhantomData<F>,
 }
 
-impl<'a, F: Field + GpuName> SingleFftKernel<'a, F> {
+impl<'a, F: Field> SingleFftKernel<'a, F> {
     /// Create a new FFT instance for the given device.
     ///
     /// The `maybe_abort` function is called when it is possible to abort the computation, without
@@ -45,7 +44,8 @@ impl<'a, F: Field + GpuName> SingleFftKernel<'a, F> {
     /// Performs FFT on `input`
     /// * `omega` - Special value `omega` is used for FFT over finite-fields
     /// * `log_n` - Specifies log2 of number of elements
-    pub fn radix_fft(&mut self, input: &mut [F], omega: &F, log_n: u32) -> EcResult<()> {
+    pub fn radix_fft(&mut self, input: &mut [F], omega: &F, log_n: u32, reverse: bool) -> EcResult<()> {
+        
         let closures = program_closures!(|program, input: &mut [F]| -> EcResult<()> {
             let n = 1 << log_n;
             // All usages are safe as the buffers are initialized from either the host or the GPU
@@ -57,9 +57,9 @@ impl<'a, F: Field + GpuName> SingleFftKernel<'a, F> {
 
             // Precalculate:
             // [omega^(0/(2^(deg-1))), omega^(1/(2^(deg-1))), ..., omega^((2^(deg-1)-1)/(2^(deg-1)))]
-            let mut pq = vec![F::ZERO; 1 << max_deg >> 1];
-            let twiddle = omega.pow_vartime([(n >> max_deg) as u64]);
-            pq[0] = F::ONE;
+            let mut pq = vec![F::zero(); 1 << max_deg >> 1];
+            let twiddle = omega.pow([(n >> max_deg) as u64]);
+            pq[0] = F::one();
             if max_deg > 1 {
                 pq[1] = twiddle;
                 for i in 2..(1 << max_deg >> 1) {
@@ -70,10 +70,10 @@ impl<'a, F: Field + GpuName> SingleFftKernel<'a, F> {
             let pq_buffer = program.create_buffer_from_slice(&pq)?;
 
             // Precalculate [omega, omega^2, omega^4, omega^8, ..., omega^(2^31)]
-            let mut omegas = vec![F::ZERO; 32];
+            let mut omegas = vec![F::zero(); 32];
             omegas[0] = *omega;
             for i in 1..LOG2_MAX_ELEMENTS {
-                omegas[i] = omegas[i - 1].pow_vartime([2u64]);
+                omegas[i] = omegas[i - 1].pow([2u64]);
             }
             let omegas_buffer = program.create_buffer_from_slice(&omegas)?;
 
@@ -92,9 +92,14 @@ impl<'a, F: Field + GpuName> SingleFftKernel<'a, F> {
                 let deg = cmp::min(max_deg, log_n - log_p);
 
                 let n = 1u32 << log_n;
+                let keep_reverse = if reverse && (log_p + deg >= log_n) {
+                    1
+                } else {
+                    0
+                };
                 let local_work_size = 1 << cmp::min(deg - 1, MAX_LOG2_LOCAL_WORK_SIZE);
                 let global_work_size = n >> deg;
-                let kernel_name = format!("{}_radix_fft", F::name());
+                let kernel_name = "pairing_ce__bn256__fr__Fr_radix_fft";
                 let kernel = program.create_kernel(
                     &kernel_name,
                     global_work_size as usize,
@@ -110,6 +115,8 @@ impl<'a, F: Field + GpuName> SingleFftKernel<'a, F> {
                     .arg(&log_p)
                     .arg(&deg)
                     .arg(&max_deg)
+                    .arg(&log_n)
+                    .arg(&keep_reverse)
                     .run()?;
 
                 log_p += deg;
@@ -128,14 +135,14 @@ impl<'a, F: Field + GpuName> SingleFftKernel<'a, F> {
 /// One FFT kernel for each GPU available.
 pub struct FftKernel<'a, F>
 where
-    F: Field + GpuName,
+    F: Field,
 {
     kernels: Vec<SingleFftKernel<'a, F>>,
 }
 
 impl<'a, F> FftKernel<'a, F>
 where
-    F: Field + GpuName,
+    F: Field,
 {
     /// Create new kernels, one for each given device.
     pub fn create(programs: Vec<Program>) -> EcResult<Self> {
@@ -188,8 +195,8 @@ where
     /// * `log_n` - Specifies log2 of number of elements
     ///
     /// Uses the first available GPU.
-    pub fn radix_fft(&mut self, input: &mut [F], omega: &F, log_n: u32) -> EcResult<()> {
-        self.kernels[0].radix_fft(input, omega, log_n)
+    pub fn radix_fft(&mut self, input: &mut [F], omega: &F, log_n: u32, reverse: bool) -> EcResult<()> {
+        self.kernels[0].radix_fft(input, omega, log_n, reverse)
     }
 
     /// Performs FFT on `inputs`
@@ -202,6 +209,7 @@ where
         inputs: &mut [&mut [F]],
         omegas: &[F],
         log_ns: &[u32],
+        reverse: bool
     ) -> EcResult<()> {
         let n = inputs.len();
         let num_devices = self.kernels.len();
@@ -225,7 +233,7 @@ where
                             break;
                         }
 
-                        if let Err(err) = kern.radix_fft(input, omega, *log_n) {
+                        if let Err(err) = kern.radix_fft(input, omega, *log_n, reverse) {
                             *result.write().unwrap() = Err(err);
                             break;
                         }

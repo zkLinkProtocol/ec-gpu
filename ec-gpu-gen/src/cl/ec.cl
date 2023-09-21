@@ -5,6 +5,7 @@
 typedef struct {
   FIELD x;
   FIELD y;
+  long unused;
 } POINT_affine;
 
 typedef struct {

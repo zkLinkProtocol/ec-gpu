@@ -17,7 +17,6 @@ KERNEL void POINT_multiexp(
     uint num_groups,
     uint num_windows,
     uint window_size) {
-
   // We have `num_windows` * `num_groups` threads per multiexp.
   const uint gid = GET_GLOBAL_ID();
   if(gid >= num_windows * num_groups) return;
